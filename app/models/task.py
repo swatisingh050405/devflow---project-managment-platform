@@ -1,7 +1,9 @@
 from datetime import datetime
-from app.models.user import User
-from app.models.project import Project
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from app.models.user import User
+    from app.models.project import Project
 
 from sqlalchemy import (
     CheckConstraint,

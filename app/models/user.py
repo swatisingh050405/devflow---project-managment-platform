@@ -1,6 +1,9 @@
 from datetime import datetime
-from app.models.project import Project
-from app.models.task import Task
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models.project import Project
+    from app.models.task import Task
 
 from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
