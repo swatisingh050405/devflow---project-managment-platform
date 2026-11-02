@@ -38,23 +38,23 @@ def create_task(
         User.id == task_data.assignee_id
     ).first()
 
-    if not assignee:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Assignee not found"
-        )
-
-    if assignee.id != project.owner_id:
-        member = db.query(ProjectMember).filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == assignee.id
-        ).first()
-
-        if not member:
+        if not assignee:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Assignee is not a member of this project"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assignee not found"
             )
+
+        if assignee.id != project.owner_id:
+            member = db.query(ProjectMember).filter(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == assignee.id
+            ).first()
+
+            if not member:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Assignee is not a member of this project"
+                )
 
     new_task = Task(
         title=task_data.title,
@@ -76,8 +76,15 @@ def create_task(
 @router.get("/", response_model=list[TaskResponse])
 def get_tasks(
     project_id: int,
+    task_status: str | None = None,
+    priority: str | None = None,
+    assignee_id: int | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 10,
+    sort_by: str = "created_at",
+  order: str = "desc",
 ):
     project = db.query(Project).filter(
         Project.id == project_id,
@@ -92,9 +99,43 @@ def get_tasks(
 
     tasks = db.query(Task).filter(
         Task.project_id == project_id
-    ).all()
+    )
 
-    return tasks
+    if task_status:
+        tasks = tasks.filter(Task.status == task_status)
+
+    if priority:
+        tasks = tasks.filter(Task.priority == priority)
+
+    if assignee_id is not None:
+        tasks = tasks.filter(Task.assignee_id == assignee_id) 
+
+    if sort_by == "created_at":
+        sort_column = Task.created_at
+    elif sort_by == "priority":
+        sort_column = Task.priority
+    elif sort_by == "title":
+        sort_column = Task.title
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid sort field"
+        )
+
+    if order not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Order must be asc or desc"
+        )
+
+    if order == "desc":
+       tasks = tasks.order_by(sort_column.desc())
+    else:
+        tasks = tasks.order_by(sort_column.asc())
+
+    tasks = tasks.offset(skip).limit(limit)
+
+    return tasks.all()
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -161,20 +202,20 @@ def update_task(
         User.id == task_data.assignee_id
     ).first()
 
-    if not assignee:
-        raise HTTPException(status_code=404, detail="Assignee not found")
+        if not assignee:
+            raise HTTPException(status_code=404, detail="Assignee not found")
 
-    if assignee.id != project.owner_id:
-        member = db.query(ProjectMember).filter(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == assignee.id
-        ).first()
+        if assignee.id != project.owner_id:
+            member = db.query(ProjectMember).filter(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == assignee.id
+            ).first()
 
-        if not member:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Assignee is not a member of this project"
-            )
+            if not member:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Assignee is not a member of this project"
+                )
 
     task.title = task_data.title
     task.description = task_data.description

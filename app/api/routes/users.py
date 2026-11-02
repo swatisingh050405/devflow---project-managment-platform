@@ -1,11 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-
+from fastapi import Response
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse , UserLogin
-from app.core.security import hash_password , verify_password , create_access_token
+from app.schemas.user import UserCreate, UserResponse , UserLogin , UserProfileUpdate , UserPasswordUpdate
+from app.core.security import hash_password , verify_password , create_access_token, create_refresh_token
 from fastapi.security import OAuth2PasswordRequestForm
+from app.core.dependencies import get_current_user
+from app.models.refresh_token import RefreshToken
+
+
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -43,6 +47,7 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db),):
 # login
 @router.post("/login")
 def login(
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
@@ -51,8 +56,7 @@ def login(
     ).first()
 
     if not user or not verify_password(
-        form_data.password,
-        user.hashed_password
+        form_data.password, user.hashed_password
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -61,12 +65,31 @@ def login(
 
     access_token = create_access_token(user.id)
 
+    refresh_token, jti, expires_at = create_refresh_token(user.id)
+
+    refresh_session = RefreshToken(
+        user_id=user.id,
+        jti=jti,
+        expires_at=expires_at
+    )
+
+    db.add(refresh_session)
+    db.commit()
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=False,  # True in production with HTTPS
+        samesite="lax",
+        max_age=7 * 24 * 60 * 60,
+        path="/auth"
+    )
+
     return {
         "access_token": access_token,
         "token_type": "bearer"
     }
-
-
 # get all users
 @router.get("/", response_model=list[UserResponse])
 
@@ -96,3 +119,56 @@ def delete_user(
     return None
 
 
+# get my profile
+@router.get("/me", response_model=UserResponse)
+def get_my_profile(current_user:User = Depends(get_current_user)):
+    return current_user
+
+
+@router.patch("/me", response_model=UserResponse)
+def update_my_profile(profile_data: UserProfileUpdate,db: Session =Depends(get_db),current_user: User = Depends(get_current_user)):
+    if profile_data.email:
+        existing_user = db.query(User).filter(
+            User.email == profile_data.email,
+            User.id != current_user.id
+        ).first()
+
+        if existing_user:
+            raise HTTPException(
+                status_code=400,
+                detail="Email already registered"
+            )
+
+    update_data = profile_data.model_dump(exclude_unset=True)
+
+    for key, value in update_data.items():
+        setattr(current_user, key, value)
+
+    db.commit()
+    db.refresh(current_user)
+
+    return current_user
+
+
+@router.patch("/me/password")
+def change_password(
+    password_data: UserPasswordUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not verify_password(
+        password_data.current_password,
+        current_user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect"
+        )
+
+    current_user.hashed_password = hash_password(
+        password_data.new_password
+    )
+
+    db.commit()
+
+    return {"message": "Password updated successfully"}

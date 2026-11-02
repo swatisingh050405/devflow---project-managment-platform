@@ -27,17 +27,22 @@ def get_current_user(
             algorithms=[settings.ALGORITHM],
         )
 
+        if payload.get("type") != "access":
+            raise credentials_exception
+
         user_id = payload.get("sub")
 
         if user_id is None:
             raise credentials_exception
 
-    except jwt.InvalidTokenError:
+        user_id = int(user_id)
+
+    except (jwt.InvalidTokenError, TypeError, ValueError):
         raise credentials_exception
 
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    user = db.query(User).filter(User.id == user_id).first()
 
-    if user is None:
+    if user is None or not user.is_active:
         raise credentials_exception
 
     return user

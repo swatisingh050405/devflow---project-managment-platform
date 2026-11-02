@@ -1,6 +1,7 @@
 from pwdlib import PasswordHash
 from datetime import datetime, timedelta, timezone
 import jwt
+import uuid
 
 from app.core.config import settings
 
@@ -23,6 +24,7 @@ def create_access_token(user_id: int) -> str:
     payload = {
         "sub": str(user_id),
         "exp": expires_at,
+        "type": "access"
     }
 
     return jwt.encode(
@@ -30,3 +32,26 @@ def create_access_token(user_id: int) -> str:
         settings.SECRET_KEY,
         algorithm=settings.ALGORITHM,
     )
+
+
+def create_refresh_token(user_id: int):
+    jti = str(uuid.uuid4())
+
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+    )
+
+    payload = {
+        "sub": str(user_id),
+        "exp": expires_at,
+        "type": "refresh",
+        "jti": jti
+    }
+
+    token = jwt.encode(
+        payload,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM
+    )
+
+    return token, jti, expires_at
