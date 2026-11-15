@@ -6,7 +6,11 @@ from app.models.task import Task
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
-from app.core.dependencies import get_current_user
+from app.core.dependencies import (
+    get_current_user,
+    require_project_owner,
+    require_project_member
+)
 from app.models.project_member import ProjectMember
 
 router = APIRouter(
@@ -14,18 +18,17 @@ router = APIRouter(
     tags=["Tasks"],
 )
 
-
+# CREATE TASK
 @router.post("/", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 def create_task(
     project_id: int,
     task_data: TaskCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_owner),
 ):
     project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.owner_id == current_user.id
-    ).first()
+    Project.id == project_id
+).first()
 
     if not project:
         raise HTTPException(
@@ -72,7 +75,7 @@ def create_task(
 
     return new_task
 
-
+# GET ALL TASKS FOR A PROJECT
 @router.get("/", response_model=list[TaskResponse])
 def get_tasks(
     project_id: int,
@@ -80,22 +83,13 @@ def get_tasks(
     priority: str | None = None,
     assignee_id: int | None = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_member),
     skip: int = 0,
     limit: int = 10,
     sort_by: str = "created_at",
   order: str = "desc",
 ):
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.owner_id == current_user.id
-    ).first()
-
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+   
 
     tasks = db.query(Task).filter(
         Task.project_id == project_id
@@ -137,24 +131,15 @@ def get_tasks(
 
     return tasks.all()
 
-
+# GET ONE TASK
 @router.get("/{task_id}", response_model=TaskResponse)
 def get_task(
     project_id: int,
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_member),
 ):
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.owner_id == current_user.id
-    ).first()
-
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+   
 
     task = db.query(Task).filter(
         Task.id == task_id,
@@ -169,25 +154,25 @@ def get_task(
 
     return task
 
-
+# UPDATE TASK
 @router.put("/{task_id}", response_model=TaskResponse)
 def update_task(
     project_id: int,
     task_id: int,
     task_data: TaskUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_owner),
 ):
     project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.owner_id == current_user.id
+    Project.id == project_id
     ).first()
 
     if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+       raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Project not found"
+    )
+   
 
     task = db.query(Task).filter(
         Task.id == task_id,
@@ -228,25 +213,24 @@ def update_task(
 
     return task
 
-
+# UPDATE TASK
 @router.patch("/{task_id}", response_model=TaskResponse)
 def patch_task(
     project_id: int,
     task_id: int,
     task_data: TaskUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_project_member)
 ):
     project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.owner_id == current_user.id
+    Project.id == project_id
     ).first()
 
     if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
+       raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Project not found"
+    )
 
     task = db.query(Task).filter(
         Task.id == task_id,
@@ -254,17 +238,45 @@ def patch_task(
     ).first()
 
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found"
+        )
 
     update_data = task_data.model_dump(exclude_unset=True)
 
+    # Check whether user is owner or admin
+    is_owner = project.owner_id == current_user.id
+    is_admin = current_user.role == "admin"
+
+    if not is_owner and not is_admin:
+
+        # Member can update only their assigned task
+        if task.assignee_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only update tasks assigned to you"
+            )
+
+        # Member can update only status
+        if set(update_data.keys()) - {"status"}:
+            raise HTTPException(
+                status_code=403,
+                detail="Members can only update task status"
+            )
+
+    # Validate assignee for owner/admin
     if "assignee_id" in update_data and update_data["assignee_id"] is not None:
+
         assignee = db.query(User).filter(
             User.id == update_data["assignee_id"]
         ).first()
 
         if not assignee:
-            raise HTTPException(status_code=404, detail="Assignee not found")
+            raise HTTPException(
+                status_code=404,
+                detail="Assignee not found"
+            )
 
         if assignee.id != project.owner_id:
             member = db.query(ProjectMember).filter(
@@ -274,7 +286,7 @@ def patch_task(
 
             if not member:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=400,
                     detail="Assignee is not a member of this project"
                 )
 
@@ -286,18 +298,16 @@ def patch_task(
 
     return task
 
-
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_task(
     project_id: int,
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_project_owner)
 ):
     project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.owner_id == current_user.id
-    ).first()
+    Project.id == project_id
+).first()
 
     if not project:
         raise HTTPException(
